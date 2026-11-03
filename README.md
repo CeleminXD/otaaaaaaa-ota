@@ -1,65 +1,37 @@
-# Publicación OTA del proyecto ESP32
+# Publicación OTA del ESP32
 
-Este repositorio aloja el manifiesto de actualización y organiza los binarios
-publicados. El código fuente y la compilación del ESP32 siguen en el proyecto
-del dispositivo; este repositorio es independiente.
+Este repositorio aloja los Releases de firmware y el manifiesto que consultan los dispositivos. El código fuente y la compilación del ESP32 permanecen en el proyecto del dispositivo.
 
-## Alojamiento
+## Configuración del dispositivo
 
-1. Crea un repositorio público en GitHub llamado `otaaaaaaa-ota` y sube el
-   contenido de este repositorio.
-2. Conserva `manifest.json` en la raíz como URL estable para los dispositivos:
-   `https://raw.githubusercontent.com/OWNER/otaaaaaaa-ota/main/manifest.json`.
-3. En el proyecto ESP32, configura esa URL en `idf.py menuconfig` →
-   **Hi Tetranutras WiFi / OTA** → **HTTPS URL for the OTA manifest**. Debe
-   tener menos de 200 caracteres.
+Configura en ESP-IDF menuconfig → Hi Tetranutras WiFi / OTA → HTTPS URL for the OTA manifest:
 
-Reemplaza `OWNER` con tu nombre de usuario u organización de GitHub. No
-configures el URL de ejemplo en los dispositivos.
+    https://raw.githubusercontent.com/CeleminXD/otaaaaaaa-ota/main/manifest.json
 
 ## Publicar una versión
 
-Abre una terminal con ESP-IDF activado y ejecuta desde este repositorio:
+1. En el proyecto ESP32, actualiza version.txt y compila con idf.py build.
+2. Desde PowerShell, ejecuta en este repositorio (ajusta la versión):
 
-```powershell
-.\package-release.ps1 `
-  -EspProjectPath 'C:\ruta\al\proyecto\esp32' `
-  -Version '1.0.1' `
-  -GitHubRepository 'OWNER/otaaaaaaa-ota'
-```
+    .\package-release.ps1 -EspProjectPath 'C:\Users\USUARIO\otaaaaaaa' -Version '1.0.9' -GitHubRepository 'CeleminXD/otaaaaaaa-ota'
 
-Antes, cambia `version.txt` en el proyecto ESP32 al mismo valor y ejecuta
-`idf.py build`. El empaquetador comprueba que el binario se haya generado
-después del cambio de versión. Produce:
+3. En GitHub, crea un Release con etiqueta v1.0.9, adjunta el archivo dist/otaaaaaaa-v1.0.9.bin y publícalo.
 
-- `dist/otaaaaaaa-v1.0.1.bin`, para adjuntar al Release de GitHub.
-- `manifest.json`, que se publica en la rama `main` después de que el asset
-  del Release ya esté disponible.
-- `dist/manifest.json`, copia del mismo manifiesto para revisar el paquete.
+Al publicarse un Release estable, la acción de GitHub valida la etiqueta y el asset, y actualiza manifest.json en main con la URL real del binario. Usa el nombre versionado que genera el empaquetador; se acepta otaaaaaaa.bin como compatibilidad con Releases anteriores. Revisa la ejecución en Actions. Si falla, el manifiesto anterior se conserva.
 
-Crea un Release de GitHub con etiqueta `v1.0.1` y adjunta el `.bin`. Luego
-confirma y sube `manifest.json` a `main`. Así los dispositivos solo ven la
-nueva versión después de que su firmware ya se pueda descargar.
+No subas manifest.json manualmente: la acción lo publica después de que el binario esté disponible. El workflow usa GITHUB_TOKEN con permiso contents: write; no necesita un token personal. Si GitHub bloquea la escritura, revisa Settings → Actions → General → Workflow permissions.
 
 El manifiesto tiene este formato:
 
-```json
-{
-  "version": "1.0.1",
-  "url": "https://github.com/OWNER/otaaaaaaa-ota/releases/download/v1.0.1/otaaaaaaa-v1.0.1.bin"
-}
-```
+    {
+      "version": "1.0.9",
+      "url": "https://github.com/CeleminXD/otaaaaaaa-ota/releases/download/v1.0.9/otaaaaaaa-v1.0.9.bin"
+    }
 
-La aplicación consulta el manifiesto al iniciar OTA y luego cada hora. Si la
-red o el servidor no responden, vuelve a intentar al minuto. Solo instala
-una versión `MAJOR.MINOR.PATCH` superior a la que ya está ejecutando.
+El dispositivo revisa el manifiesto al iniciar y luego cada hora. Solo instala una versión MAJOR.MINOR.PATCH superior a la instalada. Un Release publicado antes de crear el workflow no activa la acción retroactivamente.
 
 ## Primera instalación
 
-El dispositivo debe recibir inicialmente por USB una compilación del
-proyecto ESP32 que tenga rollback habilitado, la URL estable del manifiesto
-configurada y una versión semántica en `version.txt`. Después, las nuevas
-versiones se distribuyen mediante los Releases.
+La primera instalación se hace por USB con rollback habilitado, la URL estable del manifiesto configurada y una versión semántica en version.txt. Después, las versiones se distribuyen mediante Releases.
 
-No publiques credenciales Wi-Fi, claves privadas ni archivos `sdkconfig` en
-este repositorio.
+No publiques credenciales Wi-Fi, claves privadas ni archivos sdkconfig en este repositorio.
