@@ -218,7 +218,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "No se pudieron consultar las ejecuciones de Actions: $($runsRaw -join ' ')" }
         $runs = ConvertFrom-Json -InputObject ($runsRaw -join [Environment]::NewLine)
         $workflowRun = @($runs.workflow_runs) |
-            Where-Object { $_.event -eq 'release' -and ([DateTimeOffset]::Parse($_.created_at) -ge $releaseStarted.AddMinutes(-2)) } |
+            Where-Object { $_.event -eq 'release' -and (([DateTime]$_.created_at).ToUniversalTime() -ge $releaseStarted.UtcDateTime.AddMinutes(-2)) } |
             Sort-Object -Property created_at -Descending |
             Select-Object -First 1
         if ($workflowRun -and $workflowRun.status -eq 'completed') {
