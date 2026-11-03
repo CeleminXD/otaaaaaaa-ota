@@ -54,6 +54,13 @@ $packageScript = Join-Path $otaRepositoryPath 'package-release.ps1'
 if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) { throw "No existe version.txt en $projectPath" }
 if (-not (Test-Path -LiteralPath $packageScript -PathType Leaf)) { throw "No se encontró $packageScript" }
 
+# La terminal ESP-IDF puede tener HOME propio; fija la carpeta estándar de gh si contiene la sesión.
+if (-not $env:GH_CONFIG_DIR) {
+    $standardGhConfig = Join-Path $env:APPDATA 'GitHub CLI'
+    if (Test-Path -LiteralPath (Join-Path $standardGhConfig 'hosts.yml') -PathType Leaf) {
+        $env:GH_CONFIG_DIR = $standardGhConfig
+    }
+}
 $portableGh = Join-Path $env:LOCALAPPDATA 'Programs\GitHubCLI\bin\gh.exe'
 $ghCandidates = @()
 if (Test-Path -LiteralPath $portableGh -PathType Leaf) { $ghCandidates += $portableGh }
