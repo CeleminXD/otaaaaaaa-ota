@@ -69,8 +69,15 @@ $account = $null
 $wrongGhPath = $null
 $wrongAccount = $null
 foreach ($candidateGh in $ghCandidates) {
-    $candidateAccountResult = & $candidateGh api user --jq .login 2>$null
-    $candidateExitCode = $LASTEXITCODE
+    try {
+        $candidateAccountResult = & $candidateGh api user --jq .login 2>$null
+        $candidateExitCode = $LASTEXITCODE
+    }
+    catch {
+        # Windows PowerShell convierte stderr de ejecutables nativos en excepciones.
+        $candidateAccountResult = @()
+        $candidateExitCode = 1
+    }
     if ($candidateExitCode -ne 0) { continue }
 
     $candidateAccount = ($candidateAccountResult -join '').Trim()
