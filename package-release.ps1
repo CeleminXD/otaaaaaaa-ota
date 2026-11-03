@@ -56,10 +56,9 @@ $manifestJson = $manifest | ConvertTo-Json
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 New-Item -ItemType Directory -Force -Path $distPath | Out-Null
 Copy-Item -LiteralPath $firmwareFile -Destination (Join-Path $distPath $firmwareName) -Force
-[System.IO.File]::WriteAllText((Join-Path $repositoryRoot 'manifest.json'), $manifestJson, $utf8NoBom)
 [System.IO.File]::WriteAllText((Join-Path $distPath 'manifest.json'), $manifestJson, $utf8NoBom)
 
-Write-Host "Binario listo para el Release: $(Join-Path $distPath $firmwareName)"
-Write-Host "Manifiesto generado: $(Join-Path $repositoryRoot 'manifest.json')"
-Write-Host "URL estable para menuconfig: $manifestUrl"
-Write-Host "Siguiente: publica primero el binario en el Release v$Version y después sube manifest.json a main."
+Write-Host "Binario listo para adjuntar al Release: $(Join-Path $distPath $firmwareName)"
+Write-Host "Manifiesto de referencia local (no subir): $(Join-Path $distPath 'manifest.json')"
+Write-Host "URL estable del manifiesto para menuconfig: $manifestUrl"
+Write-Host "Publica el Release v$Version con el binario; GitHub Actions actualizara manifest.json en main."
