@@ -43,7 +43,23 @@ jobs:
             echo "::error::Release asset URL is invalid or too long for the ESP firmware."
             exit 1
           fi
-          jq -n --arg version "$version" --arg url "$asset_url" '{version: $version, url: $url}' > manifest.json
+          checksum_name="${asset_name}.sha256"
+          if ! jq -e --arg name "$checksum_name" '.[] | select(.name == $name)' <<< "$assets" >/dev/null; then
+            echo "::error::Release must include $checksum_name generated with the firmware package."
+            exit 1
+          fi
+          checksum_url="$(jq -r --arg name "$checksum_name" '.[] | select(.name == $name) | .browser_download_url' <<< "$assets")"
+          curl --fail --location --retry 3 --silent --show-error "$asset_url" -o firmware.bin
+          curl --fail --location --retry 3 --silent --show-error "$checksum_url" -o firmware.sha256
+          firmware_sha256="$(sha256sum firmware.bin | cut -d ' ' -f 1)"
+          expected_sha256="$(tr -d '[:space:]' < firmware.sha256)"
+          if [[ ! -s firmware.bin || ! "$firmware_sha256" =~ ^[a-f0-9]{64}$ || ! "$expected_sha256" =~ ^[a-f0-9]{64}$ || "$firmware_sha256" != "$expected_sha256" ]]; then
+            echo "::error::The released firmware does not match its packaged SHA-256 checksum."
+            exit 1
+          fi
+          jq -n --arg version "$version" --arg url "$asset_url" \
+            --arg model "otaaaaaaa" --arg target "esp32c6" --arg sha256 "$firmware_sha256" \
+            '{version: $version, url: $url, model: $model, target: $target, sha256: $sha256}' > manifest.json
           if git diff --quiet -- manifest.json; then
             echo "Manifest already points to this release."
             exit 0

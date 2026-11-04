@@ -1,4 +1,7 @@
 {
   "version": "1.0.1",
-  "url": "https://github.com/OWNER/otaaaaaaa-ota/releases/download/v1.0.1/otaaaaaaa-v1.0.1.bin"
+  "url": "https://github.com/OWNER/otaaaaaaa-ota/releases/download/v1.0.1/otaaaaaaa-v1.0.1.bin",
+  "model": "otaaaaaaa",
+  "target": "esp32c6",
+  "sha256": "replace-with-the-64-character-binary-sha256"
 }

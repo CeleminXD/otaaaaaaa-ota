@@ -16,6 +16,12 @@ function Get-SemanticVersion([string]$Value) {
     return [System.Version]::Parse("$($Matches[1]).$($Matches[2]).$($Matches[3])")
 }
 
+function Test-PathWithinDirectory([string]$FilePath, [string]$DirectoryPath) {
+    $fileFullPath = [System.IO.Path]::GetFullPath($FilePath)
+    $directoryFullPath = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+    return $fileFullPath.StartsWith($directoryFullPath, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-RemoteManifest([string]$GhPath, [string]$Repository) {
     $response = & $GhPath api "repos/$Repository/contents/manifest.json" 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -50,9 +56,29 @@ function Get-IdfPythonEnvironment([string[]]$ToolsRoots) {
 $projectPath = (Resolve-Path -LiteralPath $EspProjectPath).Path
 $otaRepositoryPath = $PSScriptRoot
 $versionFile = Join-Path $projectPath 'version.txt'
+$sdkconfigPath = Join-Path $projectPath 'sdkconfig'
 $packageScript = Join-Path $otaRepositoryPath 'package-release.ps1'
 if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) { throw "No existe version.txt en $projectPath" }
+if (-not (Test-Path -LiteralPath $sdkconfigPath -PathType Leaf)) { throw "No existe sdkconfig en $projectPath" }
 if (-not (Test-Path -LiteralPath $packageScript -PathType Leaf)) { throw "No se encontró $packageScript" }
+
+$sdkconfigText = [System.IO.File]::ReadAllText($sdkconfigPath)
+$signingKeyMatch = [regex]::Match($sdkconfigText, '(?m)^CONFIG_SECURE_BOOT_SIGNING_KEY="([^"]+)"\s*$')
+if (-not $signingKeyMatch.Success) { throw 'sdkconfig no define una clave privada de firma para las imágenes OTA.' }
+$signingKeyText = $signingKeyMatch.Groups[1].Value.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+if ([System.IO.Path]::IsPathRooted($signingKeyText)) {
+    $signingKeyCandidate = [System.IO.Path]::GetFullPath($signingKeyText)
+} else {
+    $signingKeyCandidate = [System.IO.Path]::GetFullPath((Join-Path $projectPath $signingKeyText))
+}
+if (-not (Test-Path -LiteralPath $signingKeyCandidate -PathType Leaf)) {
+    throw "No existe la clave de firma configurada: $signingKeyCandidate"
+}
+if ((Test-PathWithinDirectory $signingKeyCandidate $projectPath) -or
+    (Test-PathWithinDirectory $signingKeyCandidate $otaRepositoryPath)) {
+    throw 'La clave privada debe estar fuera de los proyectos ESP y OTA; no se permite empaquetarla o subirla por error.'
+}
+Write-Host "Clave de firma verificada fuera de los repositorios: $signingKeyCandidate"
 
 # La terminal ESP-IDF puede tener HOME propio; fija la carpeta estándar de gh si contiene la sesión.
 if (-not $env:GH_CONFIG_DIR) {
@@ -107,6 +133,22 @@ if (-not $ghPath) {
     $ghPath = $ghCandidates[0]
     throw "Autoriza GitHub CLI como '$owner' una vez con: & '$ghPath' auth login --hostname github.com --web --git-protocol https"
 }
+
+$remoteWorkflowResult = & $ghPath api "repos/$GitHubRepository/contents/.github/workflows/publish-manifest.yml?ref=main" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "No se pudo verificar el workflow OTA remoto: $($remoteWorkflowResult -join ' ')"
+}
+$remoteWorkflowObject = ConvertFrom-Json -InputObject ($remoteWorkflowResult -join [Environment]::NewLine)
+if ($remoteWorkflowObject.encoding -ne 'base64' -or [string]::IsNullOrWhiteSpace($remoteWorkflowObject.content)) {
+    throw 'GitHub devolvió el workflow OTA vacío o con formato inesperado.'
+}
+$remoteWorkflowText = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($remoteWorkflowObject.content))
+foreach ($requiredWorkflowMarker in @('checksum_name', 'sha256sum', 'expected_sha256', '--arg model', '--arg target')) {
+    if (-not $remoteWorkflowText.Contains($requiredWorkflowMarker)) {
+        throw 'El workflow remoto aún no valida el archivo .sha256 y los metadatos del manifiesto. Sube primero los cambios del repositorio OTA; no se publicará una versión.'
+    }
+}
+
 $releaseListResult = & $ghPath release list --repo $GitHubRepository --exclude-drafts --exclude-pre-releases --limit 100 --json tagName 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw "No se pudieron consultar los Releases: $($releaseListResult -join ' ')"
@@ -139,6 +181,7 @@ if ($currentProjectVersion -gt $latestReleaseVersion) {
 }
 $tag = "v$version"
 $assetName = "otaaaaaaa-v$version.bin"
+$checksumAssetName = "$assetName.sha256"
 $expectedAssetUrl = "https://github.com/$GitHubRepository/releases/download/$tag/$assetName"
 if ($expectedAssetUrl.Length -ge 200) { throw 'La URL del firmware supera el límite del componente OTA.' }
 
@@ -213,13 +256,28 @@ try {
     if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf) -or (Get-Item -LiteralPath $assetPath).Length -eq 0) {
         throw "No se generó el asset $assetPath."
     }
+    $checksumPath = Join-Path $otaRepositoryPath "dist\$checksumAssetName"
+    if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+        throw "No se generó el checksum $checksumPath."
+    }
+    $localManifestPath = Join-Path $otaRepositoryPath 'dist\manifest.json'
+    $localManifest = Get-Content -LiteralPath $localManifestPath -Raw | ConvertFrom-Json
+    $localChecksum = (Get-Content -LiteralPath $checksumPath -Raw).Trim()
+    if ([string]$localManifest.version -cne $version -or
+        [string]$localManifest.url -cne $expectedAssetUrl -or
+        [string]$localManifest.model -cne 'otaaaaaaa' -or
+        [string]$localManifest.target -cne 'esp32c6' -or
+        [string]$localManifest.sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or
+        $localChecksum -cne [string]$localManifest.sha256) {
+        throw 'El manifiesto local no valida versión, URL, modelo, destino ESP32-C6 y SHA-256 del binario.'
+    }
 
     if (-not $resumeDraft) {
-        & $ghPath release create $tag $assetPath --draft --repo $GitHubRepository --title "Firmware OTA $tag" --notes "Firmware ESP32-C6 $tag, compilado desde Visual Studio Code." --target main
+        & $ghPath release create $tag $assetPath $checksumPath --draft --repo $GitHubRepository --title "Firmware OTA $tag" --notes "Firmware ESP32-C6 $tag, compilado desde Visual Studio Code." --target main
         if ($LASTEXITCODE -ne 0) { throw "No se pudo crear el borrador del Release $tag." }
     } else {
         Write-Host "Reanudando el borrador existente $tag y reemplazando su binario."
-        & $ghPath release upload $tag $assetPath --clobber --repo $GitHubRepository
+        & $ghPath release upload $tag $assetPath $checksumPath --clobber --repo $GitHubRepository
         if ($LASTEXITCODE -ne 0) { throw "No se pudo cargar el binario en el borrador $tag." }
     }
 
@@ -227,8 +285,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "No se pudo verificar el borrador $tag." }
     $draftView = ConvertFrom-Json -InputObject ($draftViewRaw -join [Environment]::NewLine)
     $binaryAsset = @($draftView.assets) | Where-Object { $_.name -ceq $assetName } | Select-Object -First 1
-    if (-not $draftView.isDraft -or -not $binaryAsset -or [long]$binaryAsset.size -ne (Get-Item -LiteralPath $assetPath).Length) {
-        throw "El borrador $tag no contiene el binario completo con el nombre esperado. No se publicará."
+    $checksumAsset = @($draftView.assets) | Where-Object { $_.name -ceq $checksumAssetName } | Select-Object -First 1
+    if (-not $draftView.isDraft -or
+        -not $binaryAsset -or [long]$binaryAsset.size -ne (Get-Item -LiteralPath $assetPath).Length -or
+        -not $checksumAsset -or [long]$checksumAsset.size -ne (Get-Item -LiteralPath $checksumPath).Length) {
+        throw "El borrador $tag no contiene el binario y su checksum completos. No se publicará."
     }
 
     $releaseStarted = [DateTimeOffset]::UtcNow
@@ -265,7 +326,11 @@ try {
     }
 
     $updatedManifest = Get-RemoteManifest -GhPath $ghPath -Repository $GitHubRepository
-    if ([string]$updatedManifest.version -cne $version -or [string]$updatedManifest.url -cne $expectedAssetUrl) {
+    if ([string]$updatedManifest.version -cne $version -or
+        [string]$updatedManifest.url -cne $expectedAssetUrl -or
+        [string]$updatedManifest.model -cne [string]$localManifest.model -or
+        [string]$updatedManifest.target -cne [string]$localManifest.target -or
+        [string]$updatedManifest.sha256 -cne [string]$localManifest.sha256) {
         throw "Actions terminó, pero manifest.json no apunta a $tag y $assetName. Revisa https://github.com/$GitHubRepository/actions/workflows/publish-manifest.yml"
     }
     Write-Host "Publicación completada: $tag"
